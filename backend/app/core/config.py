@@ -14,6 +14,8 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "HBIA-TrustAI"
+    project_name: str = "HBIA-TrustAI"
+    api_v1_str: str = "/api/v1"
     app_version: str = "1.0.0"
     environment: str = "development"
     debug: bool = True

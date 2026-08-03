@@ -1,8 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.models.session import Session
-from app.models.message import Message
+from app.models.session import Session, Message
 
 
 class SessionService:

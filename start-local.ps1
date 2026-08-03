@@ -41,7 +41,7 @@ Write-Host " -> Backend API: http://localhost:8000 (API Docs: http://localhost:8
 Write-Host " -> Frontend Web: http://localhost:3000" -ForegroundColor Green
 
 # Launch Backend in new PowerShell window
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$BackendDir'; & '$VenvPython' -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$BackendDir'; & '$VenvPython' -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
 # Launch Frontend in current window
 Set-Location $FrontendDir
