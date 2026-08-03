@@ -3,8 +3,15 @@ Layer 2: LLM Client
 Multi-provider LLM client with fallback support (OpenAI + Anthropic).
 """
 from typing import AsyncGenerator, Optional
-from openai import AsyncOpenAI
-from anthropic import AsyncAnthropic
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
+
+try:
+    from anthropic import AsyncAnthropic
+except Exception:
+    AsyncAnthropic = None
 from dataclasses import dataclass
 from app.core.config import settings
 from tenacity import retry, stop_after_attempt, wait_exponential

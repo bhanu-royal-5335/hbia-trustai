@@ -2,8 +2,10 @@
 Layer 1a: ChromaDB Vector Store
 Manages vector embeddings storage and similarity search.
 """
-import chromadb
-from chromadb.config import Settings as ChromaSettings
+try:
+    import chromadb
+except Exception:
+    chromadb = None
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from app.core.config import settings
