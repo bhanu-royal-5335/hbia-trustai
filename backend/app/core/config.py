@@ -26,10 +26,15 @@ class Settings(BaseSettings):
     # LLM Providers
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    default_llm_provider: str = "openai"
-    default_model: str = "gpt-4o"
-    verification_model: str = "gpt-4o-mini"
-    embedding_model: str = "text-embedding-3-large"
+    gemini_api_key: str = ""
+    default_llm_provider: str = "ollama"
+    default_model: str = "llama3.2:latest"
+    verification_model: str = "llama3.2:latest"
+    embedding_model: str = "nomic-embed-text:latest"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2:latest"
+    gemini_model: str = "gemini-2.0-flash"
+    provider_fallback_order: str = "ollama,gemini,anthropic,openai"
 
     # Database
     database_url: str = "postgresql+asyncpg://hbia:hbia_secret@localhost:5432/hbia_db"

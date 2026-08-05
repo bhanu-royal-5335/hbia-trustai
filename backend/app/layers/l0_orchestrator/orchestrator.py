@@ -3,13 +3,14 @@ Layer 0: HBIA Orchestrator
 The central controller that coordinates all HBIA layers for trustworthy AI responses.
 
 Pipeline:
-  L0: Classify intent → route config
+  L0a: NLP Analysis — tokenise, extract entities/keywords/sentiment/topics
+  L0b: Classify intent → route config (NLP-informed)
   L1a: Safety check input
   L1b: Hybrid RAG retrieval
-  L2: LLM generation
+  L2: LLM generation (NLP-context injected into prompt)
   L3: Verification + trust scoring
   L4: Self-correction loop (if below threshold)
-  → Return response with full audit data
+  → Return response with full audit data + NLP insights
 """
 import time
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ import structlog
 
 from app.core.config import settings
 from app.layers.l0_orchestrator.intent_classifier import IntentClassifier, IntentClassification
+from app.layers.l0_orchestrator.nlp_analyzer import nlp_analyzer, NLPAnalysis
 from app.layers.l1_retrieval.retriever import rag_retriever
 from app.layers.l1_retrieval.vector_store import RetrievedChunk
 from app.layers.l1_safety.content_filter import content_filter
@@ -42,6 +44,7 @@ class HBIAResponse:
     token_usage: dict
     intent: Optional[str] = None
     layer_traces: dict = field(default_factory=dict)
+    nlp_analysis: Optional[dict] = None
 
 
 class HBIAOrchestrator:
@@ -52,6 +55,7 @@ class HBIAOrchestrator:
         self,
         query: str,
         chat_history: Optional[List[dict]] = None,
+        use_web_search: bool = True,
     ) -> HBIAResponse:
         """Full HBIA pipeline processing."""
         start_time = time.time()
@@ -59,9 +63,25 @@ class HBIAOrchestrator:
         correction_iterations = 0
         chat_history = chat_history or []
 
-        # ── L0: Intent Classification ─────────────────────────────────────
+        # ── L0a: NLP Analysis ─────────────────────────────────────────────
+        t_nlp = time.time()
+        nlp = nlp_analyzer.analyze(query)
+        layer_traces["l0_nlp"] = {
+            **nlp.to_dict(),
+            "latency_ms": int((time.time() - t_nlp) * 1000),
+        }
+        logger.info(
+            "l0_nlp_complete",
+            entities=len(nlp.entities),
+            keywords=nlp.keywords[:5],
+            sentiment=nlp.sentiment,
+            topics=nlp.topics,
+            complexity=nlp.complexity,
+        )
+
+        # ── L0b: Intent Classification (NLP-informed) ─────────────────────
         t0 = time.time()
-        intent = await self.intent_classifier.classify(query)
+        intent = await self.intent_classifier.classify(query, nlp_analysis=nlp)
         layer_traces["l0_intent"] = {
             "intent": intent.intent_type,
             "confidence": intent.confidence,
@@ -86,7 +106,7 @@ class HBIAOrchestrator:
                 layer_traces=layer_traces,
             )
 
-        # ── L1a: RAG Retrieval ───────────────────────────────────────────
+        # ── L1a: RAG Retrieval (Vector + Web Search) ───────────────────────
         t2 = time.time()
         retrieved_chunks: List[RetrievedChunk] = []
         if intent.retrieval_strategy != "none":
@@ -94,10 +114,12 @@ class HBIAOrchestrator:
                 query=query,
                 k=settings.max_retrieval_docs,
                 strategy=intent.retrieval_strategy,
+                use_web_search=use_web_search,
             )
         layer_traces["l1_retrieval"] = {
             "chunks_retrieved": len(retrieved_chunks),
             "strategy": intent.retrieval_strategy,
+            "use_web_search": use_web_search,
             "avg_relevance": (
                 sum(c.relevance_score for c in retrieved_chunks) / len(retrieved_chunks)
                 if retrieved_chunks else 0
@@ -106,13 +128,14 @@ class HBIAOrchestrator:
         }
         logger.info("l1_retrieval_complete", chunks=len(retrieved_chunks))
 
-        # ── L2: Generation ───────────────────────────────────────────────
+        # ── L2: Generation (with NLP context) ───────────────────────────
         t3 = time.time()
         messages = prompt_builder.build_rag_prompt(
             query=query,
             retrieved_chunks=retrieved_chunks,
             chat_history=chat_history,
             use_chain_of_thought=intent.chain_of_thought,
+            nlp_context=nlp.to_dict(),
         )
         gen_result: GenerationResult = await llm_client.generate(
             messages=messages,
@@ -200,8 +223,11 @@ class HBIAOrchestrator:
                 excerpt=c.content[:250] + "..." if len(c.content) > 250 else c.content,
                 relevance_score=c.relevance_score,
                 chunk_index=c.chunk_index,
+                url=c.metadata.get("url") if c.metadata else None,
+                domain=c.metadata.get("domain") if c.metadata else None,
+                is_web=bool(c.metadata.get("is_web", False)) if c.metadata else False,
             )
-            for c in retrieved_chunks[:5]
+            for c in retrieved_chunks[:6]
         ]
 
         total_ms = int((time.time() - start_time) * 1000)
@@ -226,17 +252,25 @@ class HBIAOrchestrator:
             },
             intent=intent.intent_type,
             layer_traces=layer_traces,
+            nlp_analysis=nlp.to_dict(),
         )
 
     async def stream_process(
-        self, query: str, chat_history: Optional[List[dict]] = None
+        self, query: str, chat_history: Optional[List[dict]] = None, db_session = None, db_session_id = None
     ) -> AsyncGenerator[str, None]:
         """Streaming version: yields SSE-formatted events."""
         chat_history = chat_history or []
 
+        yield 'data: {"type":"status","content":"Analysing input..."}\n\n'
+
+        # NLP Analysis
+        nlp = nlp_analyzer.analyze(query)
+        import json as _json
+        yield f'data: {_json.dumps({"type":"nlp_analysis","data":nlp.to_dict()})}\n\n'
+
         yield 'data: {"type":"status","content":"Classifying intent..."}\n\n'
 
-        intent = await self.intent_classifier.classify(query)
+        intent = await self.intent_classifier.classify(query, nlp_analysis=nlp)
         safety = await content_filter.check_input(query)
 
         if not safety.is_safe:
@@ -246,7 +280,7 @@ class HBIAOrchestrator:
         yield 'data: {"type":"status","content":"Retrieving sources..."}\n\n'
 
         retrieved_chunks = []
-        if intent.retrieval_strategy != "none":
+        if intent.retrieval_strategy != "none" and intent.retrieval_strategy is not None:
             retrieved_chunks = await rag_retriever.retrieve(query=query, strategy=intent.retrieval_strategy)
 
         yield f'data: {{"type":"status","content":"Found {len(retrieved_chunks)} sources. Generating response..."}}\n\n'
@@ -255,7 +289,7 @@ class HBIAOrchestrator:
 
         # Stream tokens
         full_response = ""
-        async for token in llm_client._openai_stream(messages, settings.default_model, 0.3, 2000):
+        async for token in llm_client.generate_stream(messages, settings.default_model, 0.3, 2000):
             full_response += token
             import json as _json
             yield f'data: {_json.dumps({"type":"token","content":token})}\n\n'
@@ -270,6 +304,25 @@ class HBIAOrchestrator:
 
         import json as _json
         yield f'data: {_json.dumps({"type":"verification_complete","data":{"trust_score":verification.trust_score,"risk":verification.hallucination_risk,"sources":sources}})}\n\n'
+
+        # Save to DB if provided
+        if db_session and db_session_id:
+            from app.db.models import Message
+            import uuid
+            msg_id = str(uuid.uuid4())
+            assistant_msg = Message(
+                id=msg_id,
+                session_id=db_session_id,
+                role="assistant",
+                content=full_response,
+                trust_score=verification.trust_score,
+                sources=_json.dumps(sources),
+                verification_data=_json.dumps(verification.model_dump())
+            )
+            db_session.add(assistant_msg)
+            await db_session.commit()
+            yield f'data: {_json.dumps({"type":"message_id","content":msg_id})}\n\n'
+
         yield 'data: {"type":"done"}\n\n'
 
     def _blocked_response(self, reason: str, start_time: float, layer_traces: dict) -> HBIAResponse:

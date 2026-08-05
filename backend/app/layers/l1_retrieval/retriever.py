@@ -1,12 +1,13 @@
 """
 Layer 1a: Hybrid Retriever
-Combines dense vector search with BM25 keyword search using Reciprocal Rank Fusion.
+Combines dense vector search with BM25 keyword search and live Web Search using Reciprocal Rank Fusion.
 """
 from dataclasses import dataclass
 from typing import List, Dict
 from rank_bm25 import BM25Okapi
 from app.layers.l1_retrieval.embedder import embedder
 from app.layers.l1_retrieval.vector_store import vector_store, RetrievedChunk
+from app.layers.l1_retrieval.web_search import web_search_engine
 from app.core.config import settings
 import structlog
 
@@ -14,22 +15,50 @@ logger = structlog.get_logger()
 
 
 class RAGRetriever:
-    """Hybrid retriever: dense + BM25 with Reciprocal Rank Fusion."""
+    """Hybrid retriever: dense + BM25 + live Web Search with Reciprocal Rank Fusion."""
 
     async def retrieve(
         self,
         query: str,
         k: int = None,
         strategy: str = "hybrid",
+        use_web_search: bool = False,
     ) -> List[RetrievedChunk]:
         k = k or settings.max_retrieval_docs
         try:
+            vector_results: List[RetrievedChunk] = []
+
             if strategy == "semantic":
-                return await self._dense_search(query, k)
+                vector_results = await self._dense_search(query, k)
             elif strategy == "keyword":
-                return await self._bm25_search(query, k)
+                vector_results = await self._bm25_search(query, k)
             else:
-                return await self._hybrid_search(query, k)
+                vector_results = await self._hybrid_search(query, k)
+
+            web_results: List[RetrievedChunk] = []
+            # Trigger web search if requested OR if local document vector store has 0 results
+            if use_web_search or not vector_results:
+                logger.info("executing_web_search_augmentation", query=query, force=use_web_search)
+                web_results = await web_search_engine.search(query, num_results=k)
+
+            # Combine and deduplicate vector & web results
+            combined = vector_results + web_results
+            seen_ids = set()
+            unique_chunks = []
+            for chunk in combined:
+                cid = f"{chunk.doc_id}_{chunk.chunk_index}"
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    unique_chunks.append(chunk)
+
+            logger.info(
+                "retrieval_complete",
+                total=len(unique_chunks),
+                vector=len(vector_results),
+                web=len(web_results),
+            )
+            return unique_chunks[:k]
+
         except Exception as e:
             logger.error("retrieval_failed", error=str(e), strategy=strategy)
             return []
@@ -42,7 +71,6 @@ class RAGRetriever:
 
     async def _bm25_search(self, query: str, k: int) -> List[RetrievedChunk]:
         """BM25 over all chunks retrieved from dense search (approximate)."""
-        # Get a larger pool for BM25 re-ranking
         query_embedding = await embedder.embed_query(query)
         pool = vector_store.similarity_search(query_embedding, k=min(k * 3, 30))
         if not pool:

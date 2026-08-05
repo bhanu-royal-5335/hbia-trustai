@@ -18,10 +18,19 @@ app = FastAPI(
     description="Hierarchical Bounded Intelligence Architecture (HBIA) for Trustworthy Generative AI",
 )
 
-# Set all CORS enabled origins
+# Set explicit CORS enabled origins (wildcard * fails with allow_credentials=True in browsers)
+cors_origins_list = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
+]
+if settings.cors_origins:
+    cors_origins_list.extend(settings.cors_origins)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.debug else settings.cors_origins,
+    allow_origins=list(set(cors_origins_list)),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +42,8 @@ app.include_router(api_router, prefix=settings.api_v1_str)
 async def on_startup():
     logger.info("Starting up HBIA TrustAI backend...")
     await init_db()
+    from app.layers.l1_retrieval.vector_store import vector_store
+    await vector_store.initialize()
 
 @app.on_event("shutdown")
 async def on_shutdown():

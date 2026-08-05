@@ -47,7 +47,11 @@ async def chat_query(
             raise HTTPException(status_code=400, detail="Use /stream endpoint for streaming")
         
         # Process through HBIA
-        hbia_response = await orchestrator.process(request.query, chat_history=chat_history)
+        hbia_response = await orchestrator.process(
+            request.query,
+            chat_history=chat_history,
+            use_web_search=request.use_web_search,
+        )
         
         # Save assistant message
         msg = await session_service.add_message(
@@ -76,6 +80,7 @@ async def chat_query(
             message_id=msg.id,
             model_used=hbia_response.model_used,
             token_usage=hbia_response.token_usage,
+            nlp_analysis=hbia_response.nlp_analysis,
         )
     except Exception as e:
         logger.error("chat_query_failed", error=str(e))
@@ -105,6 +110,6 @@ async def chat_stream(
     )
 
     return StreamingResponse(
-        orchestrator.stream_process(request.query, chat_history),
+        orchestrator.stream_process(request.query, chat_history, db_session=db, db_session_id=session_id),
         media_type="text/event-stream"
     )

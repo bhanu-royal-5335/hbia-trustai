@@ -16,21 +16,20 @@ router = APIRouter()
 
 @router.post("/ingest", response_model=DocumentUploadResponse)
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename missing")
-        
-    ext = file.filename.rsplit(".", 1)[-1].lower()
-    if ext not in ["pdf", "docx", "txt", "doc"]:
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "txt"
+    if ext not in ["pdf", "docx", "txt", "doc", "md", "csv", "json"]:
         raise HTTPException(status_code=400, detail="Unsupported file format")
 
     doc_id_str = str(uuid.uuid4())
     content = await file.read()
-    
+
     new_doc = Document(
         user_id=current_user.id,
         filename=doc_id_str,
@@ -43,15 +42,15 @@ async def upload_document(
     await db.commit()
     await db.refresh(new_doc)
 
-    background_tasks.add_task(
-        document_service.process_document,
-        db=db,
+    # Process document immediately so embeddings & chunks are in vector store before response returns
+    await document_service.process_document(
         doc_id=new_doc.id,
         doc_uuid=doc_id_str,
         file_bytes=content,
         original_filename=file.filename,
     )
 
+    await db.refresh(new_doc)
     return new_doc
 
 
@@ -75,6 +74,6 @@ async def delete_document(
     doc = await document_service.get_document(db, doc_id, current_user.id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-        
+
     await document_service.delete_document(db, doc)
     return {"status": "success", "message": "Document deleted"}

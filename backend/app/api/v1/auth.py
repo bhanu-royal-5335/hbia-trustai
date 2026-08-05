@@ -21,9 +21,10 @@ async def register(
     user_in: UserCreate,
     db: AsyncSession = Depends(get_db),
 ):
+    username = user_in.username or user_in.email.split("@")[0]
     # Check if user exists
     result = await db.execute(
-        select(User).where((User.email == user_in.email) | (User.username == user_in.username))
+        select(User).where((User.email == user_in.email) | (User.username == username))
     )
     if result.scalar_one_or_none():
         raise HTTPException(
@@ -34,7 +35,7 @@ async def register(
     # Create new user
     user = User(
         email=user_in.email,
-        username=user_in.username,
+        username=username,
         hashed_password=get_password_hash(user_in.password),
     )
     db.add(user)
@@ -48,7 +49,9 @@ async def login(
     db: AsyncSession = Depends(get_db),
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
-    result = await db.execute(select(User).where(User.email == form_data.username))
+    result = await db.execute(
+        select(User).where((User.email == form_data.username) | (User.username == form_data.username))
+    )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.hashed_password):

@@ -5,7 +5,10 @@ Detects prompt injection, harmful content, and policy violations.
 import re
 from dataclasses import dataclass, field
 from typing import List
-from openai import AsyncOpenAI
+try:
+    from openai import AsyncOpenAI
+except Exception:
+    AsyncOpenAI = None
 from app.core.config import settings
 import structlog
 import json
@@ -41,7 +44,8 @@ class SafetyResult:
 
 class ContentFilter:
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.api_key = settings.openai_api_key
+        self.client = AsyncOpenAI(api_key=self.api_key) if (AsyncOpenAI and self.api_key) else None
 
     async def check_input(self, text: str) -> SafetyResult:
         violations = []
@@ -69,37 +73,39 @@ class ContentFilter:
             )
 
         # LLM-based check for subtle cases
-        try:
-            response = await self.client.moderations.create(input=text)
-            result = response.results[0]
-            if result.flagged:
-                flagged_cats = [
-                    cat for cat, flagged in result.categories.__dict__.items() if flagged
-                ]
-                return SafetyResult(
-                    is_safe=False,
-                    violations=[f"Content policy violation: {', '.join(flagged_cats)}"],
-                    filtered_text="",
-                    risk_level="high",
-                )
-        except Exception as e:
-            logger.warning("moderation_api_failed", error=str(e))
+        if self.client:
+            try:
+                response = await self.client.moderations.create(input=text)
+                result = response.results[0]
+                if result.flagged:
+                    flagged_cats = [
+                        cat for cat, flagged in result.categories.__dict__.items() if flagged
+                    ]
+                    return SafetyResult(
+                        is_safe=False,
+                        violations=[f"Content policy violation: {', '.join(flagged_cats)}"],
+                        filtered_text="",
+                        risk_level="high",
+                    )
+            except Exception as e:
+                logger.warning("moderation_api_failed", error=str(e))
 
         return SafetyResult(is_safe=True, filtered_text=text, risk_level="none")
 
     async def check_output(self, text: str) -> SafetyResult:
-        try:
-            response = await self.client.moderations.create(input=text)
-            result = response.results[0]
-            if result.flagged:
-                return SafetyResult(
-                    is_safe=False,
-                    violations=["Output contains policy-violating content"],
-                    filtered_text="",
-                    risk_level="high",
-                )
-        except Exception as e:
-            logger.warning("output_moderation_failed", error=str(e))
+        if self.client:
+            try:
+                response = await self.client.moderations.create(input=text)
+                result = response.results[0]
+                if result.flagged:
+                    return SafetyResult(
+                        is_safe=False,
+                        violations=["Output contains policy-violating content"],
+                        filtered_text="",
+                        risk_level="high",
+                    )
+            except Exception as e:
+                logger.warning("output_moderation_failed", error=str(e))
 
         return SafetyResult(is_safe=True, filtered_text=text, risk_level="none")
 

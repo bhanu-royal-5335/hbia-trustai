@@ -57,17 +57,23 @@ class DocumentProcessor:
             for page in reader.pages:
                 text = page.extract_text() or ""
                 pages.append(text)
-            return "\n\n".join(pages)
+            extracted = "\n\n".join(pages).strip()
+            if extracted:
+                return extracted
+            return file_bytes.decode("utf-8", errors="ignore")
         except Exception as e:
             logger.error("pdf_extraction_failed", error=str(e))
-            return ""
+            return file_bytes.decode("utf-8", errors="ignore")
 
     def _extract_docx(self, file_bytes: bytes) -> str:
         try:
-            return docx2txt.process(io.BytesIO(file_bytes))
+            text = docx2txt.process(io.BytesIO(file_bytes))
+            if text and text.strip():
+                return text.strip()
+            return file_bytes.decode("utf-8", errors="ignore")
         except Exception as e:
             logger.error("docx_extraction_failed", error=str(e))
-            return ""
+            return file_bytes.decode("utf-8", errors="ignore")
 
     def _clean_text(self, text: str) -> str:
         text = re.sub(r'\n{3,}', '\n\n', text)

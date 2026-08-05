@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 from datetime import datetime
 
 
@@ -10,6 +10,9 @@ class SourceCitation(BaseModel):
     excerpt: str
     relevance_score: float = Field(ge=0.0, le=1.0)
     chunk_index: Optional[int] = None
+    url: Optional[str] = None
+    domain: Optional[str] = None
+    is_web: bool = False
 
 
 class ClaimResult(BaseModel):
@@ -20,6 +23,9 @@ class ClaimResult(BaseModel):
 
 
 class VerificationResult(BaseModel):
+    """Schema for verification results — matches VerificationOutput from verifier."""
+    model_config = {"arbitrary_types_allowed": True}
+
     trust_score: float = Field(ge=0.0, le=100.0)
     hallucination_risk: str  # low | medium | high
     claims: List[ClaimResult] = []
@@ -27,21 +33,22 @@ class VerificationResult(BaseModel):
     total_claims: int = 0
     has_hallucinations: bool = False
     hallucinated_spans: List[str] = []
+    issues: List[str] = []
 
 
 class ChatRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     session_id: Optional[int] = None
     stream: bool = False
-    use_web_search: bool = False
+    use_web_search: bool = True
 
 
 class ChatResponse(BaseModel):
-    model_config = {"protected_namespaces": ()}
+    model_config = {"protected_namespaces": (), "arbitrary_types_allowed": True}
 
     response: str
     trust_score: float
-    verification: VerificationResult
+    verification: Any  # Accepts VerificationResult or VerificationOutput (Pydantic model)
     sources: List[SourceCitation]
     correction_iterations: int
     latency_ms: int
@@ -49,6 +56,7 @@ class ChatResponse(BaseModel):
     message_id: int
     model_used: str
     token_usage: Optional[dict] = None
+    nlp_analysis: Optional[dict] = None  # Entities, keywords, sentiment, topics, complexity
 
 
 class StreamChunk(BaseModel):

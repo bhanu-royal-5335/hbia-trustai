@@ -1,19 +1,22 @@
 """
 Layer 2: Prompt Builder
 Constructs structured prompts for RAG generation, verification, and correction.
+Now injects NLP analysis context to help the LLM produce more targeted responses.
 """
-from typing import List, Optional
+from typing import Dict, List, Optional
 from app.layers.l1_retrieval.vector_store import RetrievedChunk
 
 
-SYSTEM_PROMPT = """You are HBIA-TrustAI, a trustworthy AI assistant. You answer questions accurately and honestly using the provided source documents.
+SYSTEM_PROMPT = """You are HBIA-TrustAI, an advanced, highly intelligent, and trustworthy AI assistant similar to ChatGPT and Claude. 
 
-CRITICAL RULES:
-1. ONLY use information from the provided source documents. Do not invent facts.
-2. If the sources don't contain enough information, say so clearly.
-3. Always cite which source supports each key claim using [Source N] notation.
-4. Be precise, clear, and factual.
-5. If you are uncertain about something, explicitly state your uncertainty."""
+Your goal is to provide accurate, comprehensive, beautifully structured, and helpful responses in clear Markdown format.
+
+GUIDELINES:
+1. Use clear Markdown structure: headers (##, ###), bold text for emphasis, bullet points, and code blocks where relevant.
+2. Ground your response in the provided retrieved sources (documents & live web results). Cite sources using [Source N] or [Domain] notation.
+3. Provide direct, informative, and well-organized answers. For biography, historical, or explanatory queries, provide rich context, key facts, and clear takeaways.
+4. If sources are limited, combine grounded factual statements with general knowledge, explicitly clarifying any uncertainties.
+5. Maintain a professional, articulate, and engaging tone at all times."""
 
 
 class PromptBuilder:
@@ -24,8 +27,9 @@ class PromptBuilder:
         retrieved_chunks: List[RetrievedChunk],
         chat_history: Optional[List[dict]] = None,
         use_chain_of_thought: bool = True,
+        nlp_context: Optional[Dict] = None,
     ) -> List[dict]:
-        """Build messages list for RAG generation."""
+        """Build messages list for RAG generation, optionally with NLP context."""
 
         # Format sources
         sources_text = ""
@@ -36,7 +40,35 @@ class PromptBuilder:
         if use_chain_of_thought:
             cot_instruction = "\n\nThink step by step before answering. First reason about what the sources say, then compose your answer."
 
-        user_content = f"""<retrieved_sources>
+        # Build NLP context block
+        nlp_block = ""
+        if nlp_context:
+            entities = nlp_context.get("entities", [])
+            keywords = nlp_context.get("keywords", [])
+            topics = nlp_context.get("topics", [])
+            sentiment = nlp_context.get("sentiment", "neutral")
+            question_type = nlp_context.get("question_type")
+            complexity = nlp_context.get("complexity", "moderate")
+            word_count = nlp_context.get("word_count", 0)
+
+            entity_str = ", ".join(
+                f"{e['text']} ({e['type']})" for e in entities[:6]
+            ) if entities else "none detected"
+
+            kw_str = ", ".join(keywords[:8]) if keywords else "none"
+            topic_str = ", ".join(topics) if topics else "general"
+
+            nlp_block = f"""\n<nlp_analysis>
+Query metadata (auto-detected, use to tailor your response):
+- Detected entities: {entity_str}
+- Key topics: {topic_str}
+- Top keywords: {kw_str}
+- Sentiment: {sentiment}
+- Question type: {question_type or 'statement/request'}
+- Query complexity: {complexity} ({word_count} words)
+</nlp_analysis>\n"""
+
+        user_content = f"""{nlp_block}<retrieved_sources>
 {sources_text if sources_text else "No relevant sources found in the knowledge base."}
 </retrieved_sources>
 

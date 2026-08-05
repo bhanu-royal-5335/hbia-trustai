@@ -26,44 +26,48 @@ class DocumentService:
 
     async def process_document(
         self,
-        db: AsyncSession,
         doc_id: int,
         doc_uuid: str,
         file_bytes: bytes,
         original_filename: str,
     ):
-        try:
-            logger.info("processing_document_started", doc_id=doc_id)
-            
-            # Step 1: Process into chunks
-            chunks = self.processor.process(file_bytes, original_filename, doc_uuid)
-            if not chunks:
-                raise ValueError("No text extracted from document")
-
-            # Step 2: Embed chunks
-            texts = [chunk.content for chunk in chunks]
-            embeddings = await embedder.embed_texts(texts)
-
-            # Step 3: Store in vector database
-            metadatas = [chunk.metadata for chunk in chunks]
-            vector_store.add_documents(doc_uuid, texts, embeddings, metadatas)
-
-            # Step 4: Update database status
-            doc = await db.get(Document, doc_id)
-            if doc:
-                doc.status = "ready"
-                doc.chunk_count = len(chunks)
-                await db.commit()
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            try:
+                logger.info("processing_document_started", doc_id=doc_id)
                 
-            logger.info("processing_document_complete", doc_id=doc_id, chunks=len(chunks))
+                # Step 1: Process into chunks
+                chunks = self.processor.process(file_bytes, original_filename, doc_uuid)
+                if not chunks:
+                    raise ValueError("No text extracted from document")
 
-        except Exception as e:
-            logger.error("processing_document_failed", doc_id=doc_id, error=str(e))
-            doc = await db.get(Document, doc_id)
-            if doc:
-                doc.status = "error"
-                doc.error_message = str(e)[:500]
-                await db.commit()
+                # Step 2: Embed chunks
+                texts = [chunk.content for chunk in chunks]
+                embeddings = await embedder.embed_texts(texts)
+
+                # Step 3: Store in vector database
+                metadatas = [chunk.metadata for chunk in chunks]
+                vector_store.add_documents(doc_uuid, texts, embeddings, metadatas)
+
+                # Step 4: Update database status
+                doc = await db.get(Document, doc_id)
+                if doc:
+                    doc.status = "ready"
+                    doc.chunk_count = len(chunks)
+                    await db.commit()
+                    
+                logger.info("processing_document_complete", doc_id=doc_id, chunks=len(chunks))
+
+            except Exception as e:
+                logger.error("processing_document_failed", doc_id=doc_id, error=str(e))
+                try:
+                    doc = await db.get(Document, doc_id)
+                    if doc:
+                        doc.status = "error"
+                        doc.error_message = str(e)[:500]
+                        await db.commit()
+                except Exception as commit_err:
+                    logger.error("failed_to_update_document_error_status", error=str(commit_err))
 
     async def delete_document(self, db: AsyncSession, doc: Document):
         # Remove from vector store
